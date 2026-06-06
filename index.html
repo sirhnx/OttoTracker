@@ -97,6 +97,15 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
 .fbtn.on{background:rgba(245,158,11,.1);border-color:var(--gold);color:var(--gold)}
 .btn-add{display:flex;align-items:center;gap:8px;background:linear-gradient(135deg,var(--gold),var(--gold2));color:#000;border:none;border-radius:12px;padding:10px 22px;font-family:'Outfit',sans-serif;font-weight:700;font-size:13px;cursor:pointer;transition:all .2s;box-shadow:0 4px 20px rgba(245,158,11,.3)}
 .btn-add:hover{transform:translateY(-1px);box-shadow:0 6px 28px rgba(245,158,11,.45)}
+.btn-import{display:flex;align-items:center;gap:8px;background:var(--s2);color:var(--cyan);border:1px solid rgba(34,211,238,.4);border-radius:12px;padding:10px 22px;font-family:'Outfit',sans-serif;font-weight:700;font-size:13px;cursor:pointer;transition:all .2s}
+.btn-import:hover{background:rgba(34,211,238,.08);box-shadow:0 4px 20px rgba(34,211,238,.2)}
+.import-help{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--m2);line-height:1.6;background:var(--s3);padding:12px 14px;border-radius:10px;margin-bottom:14px}
+.import-help b{color:var(--cyan)}
+.import-preview{margin-top:14px;max-height:200px;overflow-y:auto}
+.imp-row{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--s3);border-radius:8px;margin-bottom:6px;font-family:'JetBrains Mono',monospace;font-size:11px}
+.imp-row .imp-name{color:var(--txt)}
+.imp-row .imp-cost{color:var(--gold)}
+.imp-err{color:var(--red);font-size:11px;font-family:'JetBrains Mono',monospace;margin-top:8px}
 
 /* HOLDINGS TABLE */
 .tbl-wrap{background:var(--s1);border:1px solid var(--b1);border-radius:18px;overflow:hidden;margin-bottom:18px}
@@ -353,7 +362,10 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <button class="fbtn" onclick="sf('PSA Vault',this)">🏅 PSA</button>
     <button class="fbtn" onclick="sf('Sold',this)">✅ Sold</button>
   </div>
-  <button class="btn-add" onclick="oAdd()">＋&nbsp; Log Purchase</button>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn-import" onclick="oImport()">⬆&nbsp; Import</button>
+    <button class="btn-add" onclick="oAdd()">＋&nbsp; Log Purchase</button>
+  </div>
 </div>
 
 <!-- HOLDINGS -->
@@ -513,6 +525,28 @@ body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellips
     <div class="mft">
       <button class="bcnl" onclick="cm('uvM')">Cancel</button>
       <button class="bsav" style="background:linear-gradient(135deg,var(--cyan),#67e8f9);color:#000" onclick="sUV()">Update</button>
+    </div>
+  </div>
+</div>
+
+<!-- IMPORT MODAL -->
+<div class="overlay" id="importM">
+  <div class="modal" style="max-width:620px">
+    <div class="mhd"><div class="mttl" style="color:var(--cyan)">⬆ IMPORT PURCHASES</div><button class="mcls" onclick="cm('importM')">✕</button></div>
+    <div class="mbdy">
+      <div class="import-help">
+        <b>How this works:</b> Send your invoice screenshots to Claude. Claude reads them and gives you back an <b>import code</b> (a block of text). Paste that code below and hit <b>Preview</b>, then <b>Import All</b>.
+      </div>
+      <div class="fgrp">
+        <label class="flb">Paste Import Code (JSON)</label>
+        <textarea class="ft" id="importData" style="min-height:140px;font-family:'JetBrains Mono',monospace;font-size:12px" placeholder='Paste the import code from Claude here, e.g.&#10;[&#10;  {"name":"One Piece OP01 Booster Box","cat":"One Piece","type":"Sealed Box","cost":450,"date":"2026-06-01","location":"Home (AU)"}&#10;]'></textarea>
+      </div>
+      <button class="bsav" style="background:linear-gradient(135deg,var(--cyan),#67e8f9);color:#000;margin-top:12px" onclick="previewImport()">Preview</button>
+      <div class="import-preview" id="importPreview"></div>
+    </div>
+    <div class="mft">
+      <button class="bcnl" onclick="cm('importM')">Cancel</button>
+      <button class="bsav" id="importConfirmBtn" onclick="confirmImport()" style="display:none">Import All</button>
     </div>
   </div>
 </div>
@@ -922,6 +956,82 @@ function resetAll(){
   S.rewards=[];
   save(); toggleAdmin(); rAll();
   toast('Reset to $2,000 start','ok');
+}
+
+// ── IMPORT ────────────────────────────────────────────────────────
+let parsedImport=null;
+
+function oImport(){
+  document.getElementById('importData').value='';
+  document.getElementById('importPreview').innerHTML='';
+  document.getElementById('importConfirmBtn').style.display='none';
+  parsedImport=null;
+  document.getElementById('importM').classList.add('open');
+}
+
+function previewImport(){
+  const raw=document.getElementById('importData').value.trim();
+  const prev=document.getElementById('importPreview');
+  const btn=document.getElementById('importConfirmBtn');
+  if(!raw){prev.innerHTML='<div class="imp-err">Paste the import code first.</div>';btn.style.display='none';return;}
+  let data;
+  try{
+    data=JSON.parse(raw);
+  }catch(e){
+    prev.innerHTML='<div class="imp-err">⚠️ That doesn\'t look like valid import code. Make sure you copied the whole block including the [ ] brackets.</div>';
+    btn.style.display='none';return;
+  }
+  if(!Array.isArray(data)){data=[data];}
+  if(!data.length){prev.innerHTML='<div class="imp-err">No items found in that code.</div>';btn.style.display='none';return;}
+
+  // Validate + normalise each row
+  const valid=[];const errs=[];
+  data.forEach((d,idx)=>{
+    if(!d.name||d.cost===undefined||d.cost===null){errs.push('Item '+(idx+1)+': missing name or cost');return;}
+    valid.push({
+      name:String(d.name).trim(),
+      cat:d.cat||d.category||'',
+      type:d.type||'',
+      cost:parseFloat(d.cost),
+      cv:d.cv!==undefined?parseFloat(d.cv):(d.currentValue!==undefined?parseFloat(d.currentValue):parseFloat(d.cost)),
+      date:d.date||new Date().toISOString().split('T')[0],
+      location:d.location||d.loc||'Home (AU)',
+      url:d.url||'',
+      notes:d.notes||''
+    });
+  });
+
+  if(!valid.length){prev.innerHTML='<div class="imp-err">No valid items. '+errs.join('; ')+'</div>';btn.style.display='none';return;}
+
+  // Check total against available cash
+  const {cash}=calc();
+  const totalCost=valid.reduce((s,v)=>s+v.cost,0);
+  let warn='';
+  if(totalCost>cash){
+    warn='<div class="imp-err">⛔ Total cost '+fU(totalCost)+' exceeds available cash '+fU(cash)+'. Importing would overspend — review before confirming.</div>';
+  }
+
+  parsedImport=valid;
+  prev.innerHTML='<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--m2);margin-bottom:8px">'+valid.length+' item'+(valid.length!==1?'s':'')+' · total '+fU(totalCost)+'</div>'+
+    valid.map(v=>'<div class="imp-row"><span class="imp-name">'+v.name+'</span><span class="imp-cost">'+fU(v.cost)+'</span></div>').join('')+
+    (errs.length?'<div class="imp-err">Skipped: '+errs.join('; ')+'</div>':'')+warn;
+  btn.style.display='inline-block';
+}
+
+function confirmImport(){
+  if(!parsedImport||!parsedImport.length){toast('Nothing to import','err');return;}
+  const {cash}=calc();
+  const totalCost=parsedImport.reduce((s,v)=>s+v.cost,0);
+  if(totalCost>cash){
+    if(!confirm('⚠️ This import totals '+fU(totalCost)+' but only '+fU(cash)+' cash is available.\n\nImport anyway? (Cash will go negative — fix via the 🔒 admin panel if needed.)'))return;
+  }
+  let baseId=Date.now();
+  parsedImport.forEach((v,i)=>{
+    S.items.push({id:baseId+i, name:v.name, cat:v.cat, type:v.type, cost:v.cost, cv:v.cv, date:v.date, location:v.location, url:v.url, notes:v.notes, img:null, sold:false});
+  });
+  save(); cm('importM'); rAll();
+  toast('🎉 Imported '+parsedImport.length+' item'+(parsedImport.length!==1?'s':'')+'!','ok');
+  parsedImport=null;
 }
 
 // ── INIT ──────────────────────────────────────────────────────────
